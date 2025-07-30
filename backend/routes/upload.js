@@ -6,7 +6,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import User from '../models/User.js';
-import List from '../models/list.js';
+import List from '../models/List.js';
+import Task from '../models/Task.js';
 import { adminAuth } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -146,31 +147,27 @@ const validateCSVFormat = (data) => {
 };
 
 // Distribute items among agents
-const distributeItems = (items, agents) => {
-  const distribution = [];
-  const itemsPerAgent = Math.floor(items.length / agents.length);
-  const remainder = items.length % agents.length;
+const distributeItemsAsTasks = (items, agents) => {
+  const tasks = [];
+  let currentAgentIndex = 0;
 
-  let currentIndex = 0;
-
-  agents.forEach((agent, agentIndex) => {
-    const itemsForThisAgent = itemsPerAgent + (agentIndex < remainder ? 1 : 0);
-    const agentItems = items.slice(currentIndex, currentIndex + itemsForThisAgent);
+  // Distribute items one by one to agents in round-robin fashion
+  items.forEach((item, index) => {
+    const agent = agents[currentAgentIndex];
     
-    if (agentItems.length > 0) {
-      distribution.push({
-        agentId: agent._id,
-        agentName: agent.name,
-        agentEmail: agent.email,
-        items: agentItems,
-        count: agentItems.length
-      });
-    }
+    tasks.push({
+      agentId: agent._id,
+      agentName: agent.name,
+      agentEmail: agent.email,
+      item: item,
+      taskIndex: index + 1
+    });
     
-    currentIndex += itemsForThisAgent;
+    // Move to next agent, wrap around if at the end
+    currentAgentIndex = (currentAgentIndex + 1) % agents.length;
   });
 
-  return distribution;
+  return tasks;
 };
 
 // Upload and process CSV file
@@ -244,26 +241,47 @@ router.post('/', adminAuth, upload.single('file'), async (req, res) => {
     }));
 
     // Distribute items among agents
-    const distribution = distributeItems(normalizedData, agents);
+    const distributedTasks = distributeItemsAsTasks(normalizedData, agents);
 
-    // Save distributed lists to database
-    const savedLists = [];
-    for (const dist of distribution) {
-      const listData = {
-        agentId: dist.agentId,
-        items: dist.items,
-        uploadedBy: req.user._id,
-        uploadedAt: new Date(),
-        fileName: req.file.originalname,
-        totalItems: dist.count
-      };
+    // Create individual tasks for each item
+    const createdTasks = [];
+    for (const taskData of distributedTasks) {
+      const task = new Task({
+        title: `Contact: ${taskData.item.firstName}`,
+        description: `Contact ${taskData.item.firstName} at ${taskData.item.phone}${taskData.item.notes ? `\n\nNotes: ${taskData.item.notes}` : ''}`,
+        agentId: taskData.agentId,
+        status: 'pending',
+        priority: 'medium',
+        assignedBy: req.user._id,
+        metadata: {
+          firstName: taskData.item.firstName,
+          phone: taskData.item.phone,
+          notes: taskData.item.notes,
+          originalRow: taskData.item.originalRow,
+          fileName: req.file.originalname,
+          uploadedAt: new Date()
+        }
+      });
 
-      const savedList = await List.create(listData);
-      savedLists.push({
-        ...dist,
-        listId: savedList._id
+      const savedTask = await task.save();
+      createdTasks.push({
+        taskId: savedTask._id,
+        agentName: taskData.agentName,
+        agentEmail: taskData.agentEmail,
+        firstName: taskData.item.firstName,
+        phone: taskData.item.phone
       });
     }
+
+    // Group tasks by agent for summary
+    const tasksByAgent = createdTasks.reduce((acc, task) => {
+      const key = `${task.agentName} (${task.agentEmail})`;
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(task);
+      return acc;
+    }, {});
 
     // Clean up uploaded file
     if (fs.existsSync(filePath)) {
@@ -272,12 +290,16 @@ router.post('/', adminAuth, upload.single('file'), async (req, res) => {
 
     res.json({
       success: true,
-      message: `Successfully processed ${normalizedData.length} items and distributed among ${agents.length} agents`,
+      message: `Successfully created ${normalizedData.length} tasks and distributed among ${agents.length} agents`,
       data: {
-        totalItems: normalizedData.length,
+        totalTasks: normalizedData.length,
         agentsCount: agents.length,
-        distribution: savedLists,
-        fileName: req.file.originalname
+        fileName: req.file.originalname,
+        tasksByAgent: Object.keys(tasksByAgent).map(agentKey => ({
+          agent: agentKey,
+          taskCount: tasksByAgent[agentKey].length,
+          tasks: tasksByAgent[agentKey].slice(0, 3) // Show first 3 tasks as preview
+        }))
       }
     });
 
@@ -296,17 +318,65 @@ router.post('/', adminAuth, upload.single('file'), async (req, res) => {
   }
 });
 
-// Get distributed lists
-router.get('/lists', adminAuth, async (req, res) => {
+// Get upload history and task distribution
+router.get('/history', adminAuth, async (req, res) => {
   try {
-    const lists = await List.find()
+    // Get tasks created from uploads
+    const uploadTasks = await Task.find({ 
+      'metadata.fileName': { $exists: true } 
+    })
       .populate('agentId', 'name email')
-      .populate('uploadedBy', 'name email')
-      .sort({ uploadedAt: -1 });
+      .populate('assignedBy', 'name email')
+      .sort({ createdAt: -1 });
+
+    // Group by file upload
+    const uploadHistory = uploadTasks.reduce((acc, task) => {
+      const fileName = task.metadata.fileName;
+      const uploadedAt = task.metadata.uploadedAt;
+      const key = `${fileName}_${uploadedAt}`;
+      
+      if (!acc[key]) {
+        acc[key] = {
+          fileName,
+          uploadedAt,
+          uploadedBy: task.assignedBy,
+          totalTasks: 0,
+          completedTasks: 0,
+          agents: {}
+        };
+      }
+      
+      acc[key].totalTasks++;
+      if (task.status === 'completed') {
+        acc[key].completedTasks++;
+      }
+      
+      const agentKey = task.agentId._id.toString();
+      if (!acc[key].agents[agentKey]) {
+        acc[key].agents[agentKey] = {
+          name: task.agentId.name,
+          email: task.agentId.email,
+          taskCount: 0,
+          completedCount: 0
+        };
+      }
+      
+      acc[key].agents[agentKey].taskCount++;
+      if (task.status === 'completed') {
+        acc[key].agents[agentKey].completedCount++;
+      }
+      
+      return acc;
+    }, {});
+
+    const history = Object.values(uploadHistory).map(upload => ({
+      ...upload,
+      agents: Object.values(upload.agents)
+    }));
     
-    res.json(lists);
+    res.json(history);
   } catch (error) {
-    console.error('Get lists error:', error);
+    console.error('Get upload history error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
