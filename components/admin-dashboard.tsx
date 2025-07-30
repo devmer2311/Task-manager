@@ -61,8 +61,8 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAgentForm, setShowAgentForm] = useState(false);
-  const [showListsView, setShowListsView] = useState(false);
-  const [distributedLists, setDistributedLists] = useState<any[]>([]);
+  const [showHistoryView, setShowHistoryView] = useState(false);
+  const [uploadHistory, setUploadHistory] = useState<any[]>([]);
   
   // Form states
   const [agentForm, setAgentForm] = useState({
@@ -88,13 +88,13 @@ export default function AdminDashboard() {
         agentsApi.getAll(),
         tasksApi.getAll(),
         tasksApi.getStats(),
-        uploadApi.getLists().catch(() => [])
+       uploadApi.getHistory().catch(() => [])
       ]);
       
       setAgents(agentsData);
       setTasks(tasksData);
       setStats(statsData);
-      setDistributedLists(listsData);
+     setUploadHistory(listsData);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load data');
     } finally {
@@ -147,6 +147,13 @@ export default function AdminDashboard() {
         toast.success(result.message);
         setUploadFile(null);
         loadData();
+        
+        // Show task distribution summary
+        if (result.data.tasksByAgent) {
+          result.data.tasksByAgent.forEach((agentData: any) => {
+            toast.success(`${agentData.agent}: ${agentData.taskCount} tasks assigned`);
+          });
+        }
       } else {
         toast.error(result.message || 'Upload failed');
         if (result.errors && result.errors.length > 0) {
@@ -509,18 +516,18 @@ export default function AdminDashboard() {
           <div className="space-y-8">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-display text-3xl font-bold text-gray-900 mb-2">List Distribution</h1>
-                <p className="text-body text-gray-600">Upload CSV files to distribute lists among agents</p>
+               <h1 className="text-display text-3xl font-bold text-gray-900 mb-2">Task Distribution</h1>
+               <p className="text-body text-gray-600">Upload CSV files to create tasks for agents</p>
               </div>
               <button
-                onClick={() => setShowListsView(!showListsView)}
+               onClick={() => setShowHistoryView(!showHistoryView)}
                 className="apple-button-secondary"
               >
-                {showListsView ? 'Upload New File' : 'View Distributed Lists'}
+               {showHistoryView ? 'Upload New File' : 'View Upload History'}
               </button>
             </div>
             
-            {!showListsView ? (
+           {!showHistoryView ? (
               <>
                 <div className="apple-card p-8">
                   <div className="text-center">
@@ -538,10 +545,10 @@ export default function AdminDashboard() {
                         <Upload className="h-8 w-8 text-blue-600" />
                       </div>
                       <h3 className="text-display text-xl font-semibold text-gray-900 mb-2">
-                        Upload List File
+                       Upload Task File
                       </h3>
                       <p className="text-body text-gray-600 mb-6">
-                        Upload a CSV file with FirstName, Phone, and Notes columns
+                       Upload a CSV file to create individual tasks for each contact
                       </p>
                       
                       <input
@@ -596,36 +603,52 @@ export default function AdminDashboard() {
                     <p>• <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">FirstName</code> and <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">Phone</code> are required fields</p>
                     <p>• <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">Notes</code> field is optional</p>
                     <p>• Phone numbers should contain only numbers, spaces, dashes, parentheses, or plus signs</p>
-                    <p>• Lists will be distributed equally among all active agents</p>
-                    <p>• If items cannot be divided equally, remaining items are distributed sequentially</p>
+                   <p>• Each row will create a separate task assigned to agents</p>
+                   <p>• Tasks are distributed one-by-one to agents in round-robin fashion</p>
+                   <p>• All agents get equal tasks, remaining tasks go to agents 1, 2, 3... sequentially</p>
                   </div>
                 </div>
               </>
             ) : (
-              /* Distributed Lists View */
+             /* Upload History View */
               <div className="apple-card p-6">
-                <h3 className="text-display text-xl font-semibold text-gray-900 mb-6">Distributed Lists</h3>
-                {distributedLists.length === 0 ? (
+               <h3 className="text-display text-xl font-semibold text-gray-900 mb-6">Upload History</h3>
+               {uploadHistory.length === 0 ? (
                   <div className="text-center py-12">
                     <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600">No lists have been uploaded yet</p>
+                   <p className="text-gray-600">No files have been uploaded yet</p>
                   </div>
                 ) : (
                   <div className="space-y-6">
-                    {distributedLists.map((list) => (
-                      <div key={list._id} className="bg-gray-50 rounded-xl p-6">
-                        <div className="flex items-center justify-between mb-4">
+                   {uploadHistory.map((upload, index) => (
+                     <div key={index} className="bg-gray-50 rounded-xl p-6">
+                       <div className="flex items-center justify-between mb-6">
                           <div>
-                            <h4 className="font-semibold text-gray-900">{list.agentId?.name || 'Unknown Agent'}</h4>
-                            <p className="text-gray-600 text-sm">{list.agentId?.email}</p>
+                           <h4 className="font-semibold text-gray-900">{upload.fileName}</h4>
+                           <p className="text-gray-600 text-sm">
+                             Uploaded by {upload.uploadedBy?.name} • {new Date(upload.uploadedAt).toLocaleDateString()}
+                           </p>
                           </div>
                           <div className="text-right">
-                            <div className="text-2xl font-bold text-gray-900">{list.totalItems}</div>
-                            <div className="text-gray-600 text-sm">Items</div>
+                           <div className="text-2xl font-bold text-gray-900">{upload.totalTasks}</div>
+                           <div className="text-gray-600 text-sm">Tasks Created</div>
+                           <div className="text-green-600 text-sm mt-1">
+                             {upload.completedTasks} completed
+                           </div>
                           </div>
                         </div>
-                        <div className="text-sm text-gray-500">
-                          File: {list.fileName} • Uploaded: {new Date(list.uploadedAt).toLocaleDateString()}
+                       
+                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                         {upload.agents.map((agent: any, agentIndex: number) => (
+                           <div key={agentIndex} className="bg-white rounded-lg p-4">
+                             <div className="font-medium text-gray-900">{agent.name}</div>
+                             <div className="text-gray-600 text-sm">{agent.email}</div>
+                             <div className="mt-2 flex items-center justify-between">
+                               <span className="text-blue-600 font-medium">{agent.taskCount} tasks</span>
+                               <span className="text-green-600 text-sm">{agent.completedCount} done</span>
+                             </div>
+                           </div>
+                         ))}
                         </div>
                       </div>
                     ))}
