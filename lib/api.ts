@@ -140,6 +140,6 @@ export const uploadApi = {
   uploadFile: (file: File) =>
     api.uploadFile<any>('/upload', file),
   
-  getLists: () =>
-    api.get<any[]>('/upload/lists'),
+  getHistory: () =>
+    api.get<any[]>('/upload/history'),
 };
