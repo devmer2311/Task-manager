@@ -6,7 +6,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import User from '../models/User.js';
-import List from '../models/List.js';
 import Task from '../models/Task.js';
 import { adminAuth } from '../middleware/auth.js';
 
@@ -146,28 +145,27 @@ const validateCSVFormat = (data) => {
   };
 };
 
-// Distribute items among agents
-const distributeItemsAsTasks = (items, agents) => {
-  const tasks = [];
+// Round-robin distribution algorithm
+const distributeTasksRoundRobin = (tasks, agents) => {
+  const distribution = [];
   let currentAgentIndex = 0;
 
-  // Distribute items one by one to agents in round-robin fashion
-  items.forEach((item, index) => {
+  tasks.forEach((task, index) => {
     const agent = agents[currentAgentIndex];
     
-    tasks.push({
+    distribution.push({
       agentId: agent._id,
       agentName: agent.name,
       agentEmail: agent.email,
-      item: item,
+      task: task,
       taskIndex: index + 1
     });
-    
-    // Move to next agent, wrap around if at the end
+
+    // Move to next agent in round-robin fashion
     currentAgentIndex = (currentAgentIndex + 1) % agents.length;
   });
 
-  return tasks;
+  return distribution;
 };
 
 // Upload and process CSV file
@@ -228,7 +226,7 @@ router.post('/', adminAuth, upload.single('file'), async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'No active agents available',
-        errors: ['Please create at least one active agent before uploading lists']
+        errors: ['Please create at least one active agent before uploading tasks']
       });
     }
 
@@ -240,66 +238,63 @@ router.post('/', adminAuth, upload.single('file'), async (req, res) => {
       originalRow: index + 1
     }));
 
-    // Distribute items among agents
-    const distributedTasks = distributeItemsAsTasks(normalizedData, agents);
+    // Distribute tasks using round-robin algorithm
+    const distribution = distributeTasksRoundRobin(normalizedData, agents);
 
-    // Create individual tasks for each item
+    // Create tasks in database
     const createdTasks = [];
-    for (const taskData of distributedTasks) {
-      const task = new Task({
-        title: `Contact: ${taskData.item.firstName}`,
-        description: `Contact ${taskData.item.firstName} at ${taskData.item.phone}${taskData.item.notes ? `\n\nNotes: ${taskData.item.notes}` : ''}`,
-        agentId: taskData.agentId,
+    const agentTaskCounts = {};
+
+    for (const dist of distribution) {
+      const taskData = {
+        title: `Contact: ${dist.task.firstName}`,
+        description: `Name: ${dist.task.firstName}\nPhone: ${dist.task.phone}\nNotes: ${dist.task.notes || 'No additional notes'}`,
+        agentId: dist.agentId,
         status: 'pending',
         priority: 'medium',
         assignedBy: req.user._id,
         metadata: {
-          firstName: taskData.item.firstName,
-          phone: taskData.item.phone,
-          notes: taskData.item.notes,
-          originalRow: taskData.item.originalRow,
+          firstName: dist.task.firstName,
+          phone: dist.task.phone,
+          notes: dist.task.notes,
+          originalRow: dist.task.originalRow,
           fileName: req.file.originalname,
           uploadedAt: new Date()
         }
-      });
+      };
 
-      const savedTask = await task.save();
-      createdTasks.push({
-        taskId: savedTask._id,
-        agentName: taskData.agentName,
-        agentEmail: taskData.agentEmail,
-        firstName: taskData.item.firstName,
-        phone: taskData.item.phone
-      });
-    }
+      const createdTask = await Task.create(taskData);
+      createdTasks.push(createdTask);
 
-    // Group tasks by agent for summary
-    const tasksByAgent = createdTasks.reduce((acc, task) => {
-      const key = `${task.agentName} (${task.agentEmail})`;
-      if (!acc[key]) {
-        acc[key] = [];
+      // Count tasks per agent
+      if (!agentTaskCounts[dist.agentId]) {
+        agentTaskCounts[dist.agentId] = {
+          agentName: dist.agentName,
+          agentEmail: dist.agentEmail,
+          count: 0
+        };
       }
-      acc[key].push(task);
-      return acc;
-    }, {});
+      agentTaskCounts[dist.agentId].count++;
+    }
 
     // Clean up uploaded file
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
 
+    // Prepare response data
+    const distributionSummary = Object.values(agentTaskCounts);
+
     res.json({
       success: true,
-      message: `Successfully created ${normalizedData.length} tasks and distributed among ${agents.length} agents`,
+      message: `Successfully processed ${normalizedData.length} tasks and distributed among ${agents.length} agents using round-robin algorithm`,
       data: {
         totalTasks: normalizedData.length,
         agentsCount: agents.length,
+        distribution: distributionSummary,
         fileName: req.file.originalname,
-        tasksByAgent: Object.keys(tasksByAgent).map(agentKey => ({
-          agent: agentKey,
-          taskCount: tasksByAgent[agentKey].length,
-          tasks: tasksByAgent[agentKey].slice(0, 3) // Show first 3 tasks as preview
-        }))
+        uploadedAt: new Date(),
+        createdTasks: createdTasks.length
       }
     });
 
@@ -318,65 +313,107 @@ router.post('/', adminAuth, upload.single('file'), async (req, res) => {
   }
 });
 
-// Get upload history and task distribution
+// Get upload history
 router.get('/history', adminAuth, async (req, res) => {
   try {
-    // Get tasks created from uploads
-    const uploadTasks = await Task.find({ 
-      'metadata.fileName': { $exists: true } 
-    })
-      .populate('agentId', 'name email')
-      .populate('assignedBy', 'name email')
-      .sort({ createdAt: -1 });
-
-    // Group by file upload
-    const uploadHistory = uploadTasks.reduce((acc, task) => {
-      const fileName = task.metadata.fileName;
-      const uploadedAt = task.metadata.uploadedAt;
-      const key = `${fileName}_${uploadedAt}`;
-      
-      if (!acc[key]) {
-        acc[key] = {
-          fileName,
-          uploadedAt,
-          uploadedBy: task.assignedBy,
-          totalTasks: 0,
-          completedTasks: 0,
-          agents: {}
-        };
+    // Get tasks that were created from file uploads (have metadata.fileName)
+    const uploadHistory = await Task.aggregate([
+      {
+        $match: {
+          'metadata.fileName': { $exists: true }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            fileName: '$metadata.fileName',
+            uploadedAt: '$metadata.uploadedAt'
+          },
+          totalTasks: { $sum: 1 },
+          completedTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          },
+          pendingTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
+          },
+          inProgressTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'in-progress'] }, 1, 0] }
+          },
+          assignedBy: { $first: '$assignedBy' },
+          agents: { $addToSet: '$agentId' }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedBy',
+          foreignField: '_id',
+          as: 'uploadedBy'
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'agents',
+          foreignField: '_id',
+          as: 'assignedAgents'
+        }
+      },
+      {
+        $project: {
+          fileName: '$_id.fileName',
+          uploadedAt: '$_id.uploadedAt',
+          totalTasks: 1,
+          completedTasks: 1,
+          pendingTasks: 1,
+          inProgressTasks: 1,
+          completionRate: {
+            $multiply: [
+              { $divide: ['$completedTasks', '$totalTasks'] },
+              100
+            ]
+          },
+          uploadedBy: { $arrayElemAt: ['$uploadedBy.name', 0] },
+          agentsCount: { $size: '$assignedAgents' },
+          assignedAgents: {
+            $map: {
+              input: '$assignedAgents',
+              as: 'agent',
+              in: {
+                name: '$$agent.name',
+                email: '$$agent.email'
+              }
+            }
+          }
+        }
+      },
+      {
+        $sort: { uploadedAt: -1 }
       }
-      
-      acc[key].totalTasks++;
-      if (task.status === 'completed') {
-        acc[key].completedTasks++;
-      }
-      
-      const agentKey = task.agentId._id.toString();
-      if (!acc[key].agents[agentKey]) {
-        acc[key].agents[agentKey] = {
-          name: task.agentId.name,
-          email: task.agentId.email,
-          taskCount: 0,
-          completedCount: 0
-        };
-      }
-      
-      acc[key].agents[agentKey].taskCount++;
-      if (task.status === 'completed') {
-        acc[key].agents[agentKey].completedCount++;
-      }
-      
-      return acc;
-    }, {});
-
-    const history = Object.values(uploadHistory).map(upload => ({
-      ...upload,
-      agents: Object.values(upload.agents)
-    }));
+    ]);
     
-    res.json(history);
+    res.json(uploadHistory);
   } catch (error) {
     console.error('Get upload history error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get tasks by upload (for detailed view)
+router.get('/history/:fileName', adminAuth, async (req, res) => {
+  try {
+    const { fileName } = req.params;
+    
+    const tasks = await Task.find({
+      'metadata.fileName': fileName
+    })
+    .populate('agentId', 'name email')
+    .populate('assignedBy', 'name email')
+    .sort({ createdAt: 1 });
+    
+    res.json(tasks);
+  } catch (error) {
+    console.error('Get tasks by upload error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
