@@ -43,7 +43,19 @@ export default function AgentDashboard() {
   const loadTasks = async () => {
     setLoading(true);
     try {
-      const tasksData = await tasksApi.getAll();
+      // Use the contacts endpoint to get tasks with contact details
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/tasks/contacts`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch tasks');
+      }
+      
+      const tasksData = await response.json();
       setTasks(tasksData);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load tasks');
@@ -238,13 +250,30 @@ export default function AgentDashboard() {
                 >
                   <div className="space-y-4">
                     <div className="flex items-start justify-between">
-                      <h3 className="font-semibold text-gray-900 line-clamp-2 flex-1 mr-2">{task.title}</h3>
+                      <div className="flex-1 mr-2">
+                        <h3 className="font-semibold text-gray-900 line-clamp-2">{task.title}</h3>
+                        {task.contactDetails?.firstName && (
+                          <div className="text-sm text-blue-600 mt-1">
+                            Contact: {task.contactDetails.firstName}
+                          </div>
+                        )}
+                      </div>
                       <div className={`px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(task.priority)}`}>
                         {task.priority.toUpperCase()}
                       </div>
                     </div>
                     
-                    <p className="text-gray-600 text-sm line-clamp-3">{task.description}</p>
+                    {task.contactDetails?.phone && (
+                      <div className="text-gray-700 text-sm">
+                        <span className="font-medium">Phone:</span> {task.contactDetails.phone}
+                      </div>
+                    )}
+                    
+                    {task.contactDetails?.notes && (
+                      <div className="text-gray-600 text-sm">
+                        <span className="font-medium">Notes:</span> {task.contactDetails.notes}
+                      </div>
+                    )}
                     
                     <div className="flex items-center justify-between">
                       <div className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${getStatusColor(task.status)}`}>
@@ -286,6 +315,33 @@ export default function AgentDashboard() {
                     ✕
                   </button>
                 </div>
+                
+                {/* Contact Information */}
+                {selectedTask.contactDetails && (
+                  <div className="bg-blue-50 p-4 rounded-xl">
+                    <h3 className="font-semibold text-blue-900 mb-3">Contact Information</h3>
+                    <div className="space-y-2">
+                      {selectedTask.contactDetails.firstName && (
+                        <div>
+                          <span className="text-blue-700 font-medium">Name:</span>
+                          <span className="text-blue-900 ml-2">{selectedTask.contactDetails.firstName}</span>
+                        </div>
+                      )}
+                      {selectedTask.contactDetails.phone && (
+                        <div>
+                          <span className="text-blue-700 font-medium">Phone:</span>
+                          <span className="text-blue-900 ml-2">{selectedTask.contactDetails.phone}</span>
+                        </div>
+                      )}
+                      {selectedTask.contactDetails.notes && (
+                        <div>
+                          <span className="text-blue-700 font-medium">Notes:</span>
+                          <span className="text-blue-900 ml-2">{selectedTask.contactDetails.notes}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 
                 <p className="text-body text-gray-700 leading-relaxed">{selectedTask.description}</p>
                 
