@@ -61,8 +61,10 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(false);
   const [showAgentForm, setShowAgentForm] = useState(false);
-  const [showHistoryView, setShowHistoryView] = useState(false);
+  const [showUploadHistory, setShowUploadHistory] = useState(false);
   const [uploadHistory, setUploadHistory] = useState<any[]>([]);
+  const [selectedUpload, setSelectedUpload] = useState<any>(null);
+  const [uploadTasks, setUploadTasks] = useState<any[]>([]);
   
   // Form states
   const [agentForm, setAgentForm] = useState({
@@ -84,17 +86,17 @@ export default function AdminDashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [agentsData, tasksData, statsData, listsData] = await Promise.all([
+      const [agentsData, tasksData, statsData, historyData] = await Promise.all([
         agentsApi.getAll(),
         tasksApi.getAll(),
         tasksApi.getStats(),
-       uploadApi.getHistory().catch(() => [])
+        uploadApi.getHistory().catch(() => [])
       ]);
       
       setAgents(agentsData);
       setTasks(tasksData);
       setStats(statsData);
-     setUploadHistory(listsData);
+      setUploadHistory(historyData);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load data');
     } finally {
@@ -147,13 +149,6 @@ export default function AdminDashboard() {
         toast.success(result.message);
         setUploadFile(null);
         loadData();
-        
-        // Show task distribution summary
-        if (result.data.tasksByAgent) {
-          result.data.tasksByAgent.forEach((agentData: any) => {
-            toast.success(`${agentData.agent}: ${agentData.taskCount} tasks assigned`);
-          });
-        }
       } else {
         toast.error(result.message || 'Upload failed');
         if (result.errors && result.errors.length > 0) {
@@ -168,6 +163,19 @@ export default function AdminDashboard() {
       } else {
         toast.error(error.message || 'Upload failed');
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleViewUploadDetails = async (upload: any) => {
+    try {
+      setLoading(true);
+      const tasks = await uploadApi.getUploadDetails(upload.fileName);
+      setUploadTasks(tasks);
+      setSelectedUpload(upload);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to load upload details');
     } finally {
       setLoading(false);
     }
@@ -516,18 +524,20 @@ export default function AdminDashboard() {
           <div className="space-y-8">
             <div className="flex items-center justify-between">
               <div>
-               <h1 className="text-display text-3xl font-bold text-gray-900 mb-2">Task Distribution</h1>
-               <p className="text-body text-gray-600">Upload CSV files to create tasks for agents</p>
+                <h1 className="text-display text-3xl font-bold text-gray-900 mb-2">Task Distribution</h1>
+                <p className="text-body text-gray-600">Upload CSV files to distribute tasks among agents using round-robin algorithm</p>
               </div>
-              <button
-               onClick={() => setShowHistoryView(!showHistoryView)}
-                className="apple-button-secondary"
-              >
-               {showHistoryView ? 'Upload New File' : 'View Upload History'}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowUploadHistory(!showUploadHistory)}
+                  className="apple-button-secondary"
+                >
+                  {showUploadHistory ? 'Upload New File' : 'Upload History'}
+                </button>
+              </div>
             </div>
             
-           {!showHistoryView ? (
+            {!showUploadHistory ? (
               <>
                 <div className="apple-card p-8">
                   <div className="text-center">
@@ -545,10 +555,10 @@ export default function AdminDashboard() {
                         <Upload className="h-8 w-8 text-blue-600" />
                       </div>
                       <h3 className="text-display text-xl font-semibold text-gray-900 mb-2">
-                       Upload Task File
+                        Upload Task File
                       </h3>
                       <p className="text-body text-gray-600 mb-6">
-                       Upload a CSV file to create individual tasks for each contact
+                        Upload a CSV file with FirstName, Phone, and Notes columns to create tasks
                       </p>
                       
                       <input
@@ -588,7 +598,7 @@ export default function AdminDashboard() {
                           disabled={loading}
                           className="apple-button disabled:opacity-50"
                         >
-                          {loading ? 'Processing...' : 'Upload and Process'}
+                          {loading ? 'Processing...' : 'Upload and Distribute Tasks'}
                         </button>
                       </div>
                     )}
@@ -603,55 +613,117 @@ export default function AdminDashboard() {
                     <p>• <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">FirstName</code> and <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">Phone</code> are required fields</p>
                     <p>• <code className="bg-gray-100 px-2 py-1 rounded text-sm font-mono">Notes</code> field is optional</p>
                     <p>• Phone numbers should contain only numbers, spaces, dashes, parentheses, or plus signs</p>
-                   <p>• Each row will create a separate task assigned to agents</p>
-                   <p>• Tasks are distributed one-by-one to agents in round-robin fashion</p>
-                   <p>• All agents get equal tasks, remaining tasks go to agents 1, 2, 3... sequentially</p>
+                    <p>• Tasks will be distributed using round-robin algorithm among all active agents</p>
+                    <p>• Each row creates one task assigned to an agent in rotation</p>
+                    <p>• Agents will see these as contact tasks in their dashboard</p>
                   </div>
                 </div>
               </>
             ) : (
-             /* Upload History View */
-              <div className="apple-card p-6">
-               <h3 className="text-display text-xl font-semibold text-gray-900 mb-6">Upload History</h3>
-               {uploadHistory.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                   <p className="text-gray-600">No files have been uploaded yet</p>
+              /* Upload History View */
+              <div className="space-y-6">
+                {selectedUpload ? (
+                  /* Upload Details View */
+                  <div className="apple-card p-6">
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <h3 className="text-display text-xl font-semibold text-gray-900">{selectedUpload.fileName}</h3>
+                        <p className="text-gray-600">Uploaded on {new Date(selectedUpload.uploadedAt).toLocaleDateString()}</p>
+                      </div>
+                      <button
+                        onClick={() => setSelectedUpload(null)}
+                        className="apple-button-secondary"
+                      >
+                        Back to History
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                      <div className="bg-blue-50 p-4 rounded-xl text-center">
+                        <div className="text-2xl font-bold text-blue-600">{selectedUpload.totalTasks}</div>
+                        <div className="text-blue-600 text-sm">Total Tasks</div>
+                      </div>
+                      <div className="bg-green-50 p-4 rounded-xl text-center">
+                        <div className="text-2xl font-bold text-green-600">{selectedUpload.completedTasks}</div>
+                        <div className="text-green-600 text-sm">Completed</div>
+                      </div>
+                      <div className="bg-yellow-50 p-4 rounded-xl text-center">
+                        <div className="text-2xl font-bold text-yellow-600">{selectedUpload.pendingTasks}</div>
+                        <div className="text-yellow-600 text-sm">Pending</div>
+                      </div>
+                      <div className="bg-purple-50 p-4 rounded-xl text-center">
+                        <div className="text-2xl font-bold text-purple-600">{Math.round(selectedUpload.completionRate)}%</div>
+                        <div className="text-purple-600 text-sm">Completion Rate</div>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <h4 className="font-semibold text-gray-900">Task Details</h4>
+                      {uploadTasks.map((task) => (
+                        <div key={task._id} className="bg-gray-50 rounded-xl p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="font-medium text-gray-900">{task.metadata?.firstName}</div>
+                              <div className="text-sm text-gray-600">{task.metadata?.phone}</div>
+                              <div className="text-sm text-gray-500">Assigned to: {task.agentId?.name}</div>
+                            </div>
+                            <div className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(task.status)}`}>
+                              {task.status.replace('-', ' ').toUpperCase()}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
-                  <div className="space-y-6">
-                   {uploadHistory.map((upload, index) => (
-                     <div key={index} className="bg-gray-50 rounded-xl p-6">
-                       <div className="flex items-center justify-between mb-6">
-                          <div>
-                           <h4 className="font-semibold text-gray-900">{upload.fileName}</h4>
-                           <p className="text-gray-600 text-sm">
-                             Uploaded by {upload.uploadedBy?.name} • {new Date(upload.uploadedAt).toLocaleDateString()}
-                           </p>
-                          </div>
-                          <div className="text-right">
-                           <div className="text-2xl font-bold text-gray-900">{upload.totalTasks}</div>
-                           <div className="text-gray-600 text-sm">Tasks Created</div>
-                           <div className="text-green-600 text-sm mt-1">
-                             {upload.completedTasks} completed
-                           </div>
-                          </div>
-                        </div>
-                       
-                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                         {upload.agents.map((agent: any, agentIndex: number) => (
-                           <div key={agentIndex} className="bg-white rounded-lg p-4">
-                             <div className="font-medium text-gray-900">{agent.name}</div>
-                             <div className="text-gray-600 text-sm">{agent.email}</div>
-                             <div className="mt-2 flex items-center justify-between">
-                               <span className="text-blue-600 font-medium">{agent.taskCount} tasks</span>
-                               <span className="text-green-600 text-sm">{agent.completedCount} done</span>
-                             </div>
-                           </div>
-                         ))}
-                        </div>
+                  /* Upload History List */
+                  <div className="apple-card p-6">
+                    <h3 className="text-display text-xl font-semibold text-gray-900 mb-6">Upload History</h3>
+                    {uploadHistory.length === 0 ? (
+                      <div className="text-center py-12">
+                        <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                        <p className="text-gray-600">No files have been uploaded yet</p>
                       </div>
-                    ))}
+                    ) : (
+                      <div className="space-y-4">
+                        {uploadHistory.map((upload, index) => (
+                          <div key={index} className="bg-gray-50 rounded-xl p-6 hover:bg-gray-100 transition-colors">
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1">
+                                <h4 className="font-semibold text-gray-900 mb-2">{upload.fileName}</h4>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                  <div>
+                                    <span className="text-gray-500">Total Tasks:</span>
+                                    <span className="font-medium text-gray-900 ml-1">{upload.totalTasks}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">Completed:</span>
+                                    <span className="font-medium text-green-600 ml-1">{upload.completedTasks}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">Agents:</span>
+                                    <span className="font-medium text-blue-600 ml-1">{upload.agentsCount}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">Completion:</span>
+                                    <span className="font-medium text-purple-600 ml-1">{Math.round(upload.completionRate)}%</span>
+                                  </div>
+                                </div>
+                                <div className="text-xs text-gray-500 mt-2">
+                                  Uploaded on {new Date(upload.uploadedAt).toLocaleDateString()} by {upload.uploadedBy}
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => handleViewUploadDetails(upload)}
+                                className="apple-button-secondary ml-4"
+                              >
+                                View Details
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
