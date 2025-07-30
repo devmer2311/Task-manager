@@ -640,26 +640,26 @@ export default function AdminDashboard() {
                     
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                       <div className="bg-blue-50 p-4 rounded-xl text-center">
-                        <div className="text-2xl font-bold text-blue-600">{selectedUpload.totalTasks}</div>
+                        <div className="text-2xl font-bold text-blue-600">{selectedUpload.totalTasks || 0}</div>
                         <div className="text-blue-600 text-sm">Total Tasks</div>
                       </div>
                       <div className="bg-green-50 p-4 rounded-xl text-center">
-                        <div className="text-2xl font-bold text-green-600">{selectedUpload.completedTasks}</div>
+                        <div className="text-2xl font-bold text-green-600">{selectedUpload.completedTasks || 0}</div>
                         <div className="text-green-600 text-sm">Completed</div>
                       </div>
                       <div className="bg-yellow-50 p-4 rounded-xl text-center">
-                        <div className="text-2xl font-bold text-yellow-600">{selectedUpload.pendingTasks}</div>
+                        <div className="text-2xl font-bold text-yellow-600">{selectedUpload.pendingTasks || 0}</div>
                         <div className="text-yellow-600 text-sm">Pending</div>
                       </div>
                       <div className="bg-purple-50 p-4 rounded-xl text-center">
-                        <div className="text-2xl font-bold text-purple-600">{Math.round(selectedUpload.completionRate)}%</div>
+                        <div className="text-2xl font-bold text-purple-600">{Math.round(selectedUpload.completionRate || 0)}%</div>
                         <div className="text-purple-600 text-sm">Completion Rate</div>
                       </div>
                     </div>
                     
                     <div className="space-y-4">
                       <h4 className="font-semibold text-gray-900">Task Details</h4>
-                      {uploadTasks.map((task) => (
+                      {uploadTasks && uploadTasks.length > 0 ? uploadTasks.map((task) => (
                         <div key={task._id} className="bg-gray-50 rounded-xl p-4">
                           <div className="flex items-center justify-between">
                             <div className="flex-1">
@@ -672,7 +672,11 @@ export default function AdminDashboard() {
                             </div>
                           </div>
                         </div>
-                      ))}
+                      )) : (
+                        <div className="text-center py-8">
+                          <p className="text-gray-500">No task details available</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -694,23 +698,23 @@ export default function AdminDashboard() {
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                                   <div>
                                     <span className="text-gray-500">Total Tasks:</span>
-                                    <span className="font-medium text-gray-900 ml-1">{upload.totalTasks}</span>
+                                    <span className="font-medium text-gray-900 ml-1">{upload.totalTasks || 0}</span>
                                   </div>
                                   <div>
                                     <span className="text-gray-500">Completed:</span>
-                                    <span className="font-medium text-green-600 ml-1">{upload.completedTasks}</span>
+                                    <span className="font-medium text-green-600 ml-1">{upload.completedTasks || 0}</span>
                                   </div>
                                   <div>
                                     <span className="text-gray-500">Agents:</span>
-                                    <span className="font-medium text-blue-600 ml-1">{upload.agentsCount}</span>
+                                    <span className="font-medium text-blue-600 ml-1">{upload.agentsCount || 0}</span>
                                   </div>
                                   <div>
                                     <span className="text-gray-500">Completion:</span>
-                                    <span className="font-medium text-purple-600 ml-1">{Math.round(upload.completionRate)}%</span>
+                                    <span className="font-medium text-purple-600 ml-1">{Math.round(upload.completionRate || 0)}%</span>
                                   </div>
                                 </div>
                                 <div className="text-xs text-gray-500 mt-2">
-                                  Uploaded on {new Date(upload.uploadedAt).toLocaleDateString()} by {upload.uploadedBy}
+                                  Uploaded on {upload.uploadedAt ? new Date(upload.uploadedAt).toLocaleDateString() : 'Unknown'} by {upload.uploadedBy || 'Unknown'}
                                 </div>
                               </div>
                               <button
