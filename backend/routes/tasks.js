@@ -27,6 +27,38 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// Get tasks with contact details for agents
+router.get('/contacts', auth, async (req, res) => {
+  try {
+    let query = {};
+    
+    if (req.user.role === 'agent') {
+      // Agents can only see their own tasks
+      query.agentId = req.user._id;
+    }
+
+    const tasks = await Task.find(query)
+      .populate('agentId', 'name email')
+      .populate('assignedBy', 'name email')
+      .sort({ createdAt: -1 });
+    
+    // Format tasks to include contact details from metadata
+    const formattedTasks = tasks.map(task => ({
+      ...task.toObject(),
+      contactDetails: {
+        firstName: task.metadata?.firstName || '',
+        phone: task.metadata?.phone || '',
+        notes: task.metadata?.notes || ''
+      }
+    }));
+    
+    res.json(formattedTasks);
+  } catch (error) {
+    console.error('Get contact tasks error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Create task (admin only)
 router.post('/', adminAuth, async (req, res) => {
   try {
@@ -149,9 +181,46 @@ router.get('/stats', adminAuth, async (req, res) => {
       }
     ]);
 
+    // Get upload statistics
+    const uploadStats = await Task.aggregate([
+      {
+        $match: {
+          'metadata.fileName': { $exists: true }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalUploads: { $addToSet: '$metadata.fileName' },
+          totalUploadedTasks: { $sum: 1 },
+          completedUploadedTasks: {
+            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+          }
+        }
+      },
+      {
+        $project: {
+          totalUploads: { $size: '$totalUploads' },
+          totalUploadedTasks: 1,
+          completedUploadedTasks: 1,
+          uploadCompletionRate: {
+            $multiply: [
+              { $divide: ['$completedUploadedTasks', '$totalUploadedTasks'] },
+              100
+            ]
+          }
+        }
+      }
+    ]);
     res.json({
       taskStats: stats,
-      agentStats
+      agentStats,
+      uploadStats: uploadStats[0] || {
+        totalUploads: 0,
+        totalUploadedTasks: 0,
+        completedUploadedTasks: 0,
+        uploadCompletionRate: 0
+      }
     });
   } catch (error) {
     console.error('Get stats error:', error);
