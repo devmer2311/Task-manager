@@ -27,6 +27,11 @@ interface Task {
   dueDate?: string;
   assignedBy: { name: string; email: string };
   createdAt: string;
+  contactDetails?: {
+    firstName: string;
+    phone: string;
+    notes: string;
+  };
 }
 
 export default function AgentDashboard() {
