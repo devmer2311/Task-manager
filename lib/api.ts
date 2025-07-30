@@ -142,4 +142,7 @@ export const uploadApi = {
   
   getHistory: () =>
     api.get<any[]>('/upload/history'),
+  
+  getUploadDetails: (fileName: string) =>
+    api.get<any[]>(`/upload/history/${fileName}`),
 };
