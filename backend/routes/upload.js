@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import User from '../models/User.js';
-import List from '../models/List.js';
+import List from '../models/list.js';
 import { adminAuth } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
